@@ -1,0 +1,64 @@
+package main
+
+import (
+	"context"
+	"log"
+	"net"
+	"strings"
+
+	etcd "github.com/kitex-contrib/registry-etcd"
+
+	"pingpong_server/kitex_gen/pingpong/notification/notificationservice"
+	"pingpong_server/pkg/config"
+	"pingpong_server/pkg/db"
+	"pingpong_server/pkg/logger"
+	"pingpong_server/pkg/rpcx"
+)
+
+func main() {
+	cfg := config.Load()
+	logger.Init("rpc/notification/.log")
+
+	db.Init(cfg.PgDSN)
+	db.InitRedis(cfg.RedisAddr, cfg.RedisPassword)
+
+	impl := NewNotificationServiceImpl(db.DB, db.RDB)
+
+	// Recover active system notifications from DB to Redis
+	if err := impl.RecoverActiveNotifications(context.Background()); err != nil {
+		log.Printf("[Notification] Warning: failed to recover active system notifications: %v", err)
+	}
+
+	etcdEndpoints := splitEtcdEndpoints(cfg.EtcdAddr)
+	registry, err := etcd.NewEtcdRegistry(etcdEndpoints)
+	if err != nil {
+		log.Fatalf("failed to create etcd registry: %v", err)
+	}
+
+	listenAddr := cfg.ListenAddr(cfg.NotificationRPCPort)
+	addr, _ := net.ResolveTCPAddr("tcp", listenAddr)
+	svr := notificationservice.NewServer(
+		impl,
+		rpcx.ServerOptions(addr, registry, "NotificationService")...,
+	)
+
+	log.Printf("[Notification] Service starting on %s", listenAddr)
+	if err := svr.Run(); err != nil {
+		log.Fatalf("notification service failed: %v", err)
+	}
+}
+
+func splitEtcdEndpoints(raw string) []string {
+	parts := strings.Split(raw, ",")
+	endpoints := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			endpoints = append(endpoints, p)
+		}
+	}
+	if len(endpoints) == 0 {
+		return []string{"localhost:2379"}
+	}
+	return endpoints
+}

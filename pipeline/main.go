@@ -1,0 +1,136 @@
+package main
+
+import (
+	"context"
+	"log"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"pingpong_server/pipeline/consumer"
+	"pingpong_server/pkg/config"
+	"pingpong_server/pkg/db"
+	"pingpong_server/pkg/es"
+	"pingpong_server/pkg/idgen"
+	"pingpong_server/pkg/logger"
+	"pingpong_server/pkg/milestone"
+	"pingpong_server/pkg/mq"
+)
+
+func main() {
+	cfg := config.Load()
+	logger.Init("pipeline/.log")
+
+	db.Init(cfg.PgDSN)
+	log.Println("PostgreSQL connected")
+
+	mq.Init(cfg.RedisAddr, cfg.RedisPassword)
+	log.Println("Redis connected")
+
+	if err := es.InitES(cfg.EmbeddingDimensions); err != nil {
+		log.Fatalf("Failed to initialize Elasticsearch: %v", err)
+	}
+	log.Println("Elasticsearch connected")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	etcdEndpoints := splitEtcdEndpoints(cfg.EtcdAddr)
+	milestoneEventIDGen, err := idgen.NewManagedGenerator(context.Background(), idgen.ManagedGeneratorConfig{
+		Endpoints:      etcdEndpoints,
+		WorkerPrefix:   cfg.IDWorkerPrefix,
+		ServiceName:    "milestone-event-id",
+		InstanceID:     cfg.IDInstanceID,
+		LeaseTTLSecond: cfg.IDWorkerLeaseTTL,
+		EpochMS:        cfg.IDSnowflakeEpoch,
+	})
+	if err != nil {
+		log.Fatalf("failed to init milestone event id generator: %v", err)
+	}
+	defer func() {
+		_ = milestoneEventIDGen.Close(context.Background())
+	}()
+	milestoneSvc, err := milestone.NewService(
+		db.DB,
+		mq.RDB,
+		milestoneEventIDGen,
+		milestone.WithRuleCacheTTLSeconds(cfg.MilestoneRuleCacheTTL),
+	)
+	if err != nil {
+		log.Fatalf("failed to init milestone service: %v", err)
+	}
+
+	profileConsumer := consumer.NewProfileConsumer(cfg)
+	itemConsumer := consumer.NewItemConsumer(cfg)
+	itemStatsConsumer := consumer.NewItemStatsConsumer(cfg, milestoneSvc)
+
+	go profileConsumer.Start(ctx)
+	go itemConsumer.Start(ctx)
+	go itemStatsConsumer.Start(ctx)
+	go runMilestoneRecovery(ctx, milestoneSvc)
+	go runMilestoneRuleInvalidationSubscriber(ctx, milestoneSvc)
+
+	log.Println("Pipeline started, waiting for messages...")
+
+	// Graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
+
+	log.Println("Shutting down pipeline...")
+	cancel()
+	log.Println("Pipeline stopped")
+}
+
+func runMilestoneRecovery(ctx context.Context, svc *milestone.Service) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			recovered, err := svc.RecoverPendingNotifications(ctx, 100)
+			if err != nil {
+				log.Printf("milestone recover failed: %v", err)
+				continue
+			}
+			if recovered > 0 {
+				log.Printf("milestone recover restored %d pending notifications", recovered)
+			}
+		}
+	}
+}
+
+func runMilestoneRuleInvalidationSubscriber(ctx context.Context, svc *milestone.Service) {
+	err := milestone.SubscribeRuleInvalidation(ctx, mq.RDB, func(metricKey string) {
+		if metricKey == "" {
+			svc.InvalidateAllRules()
+			log.Printf("milestone rule cache invalidated for all metrics")
+			return
+		}
+		svc.InvalidateRules(metricKey)
+		log.Printf("milestone rule cache invalidated for metric=%s", metricKey)
+	})
+	if err != nil && ctx.Err() == nil {
+		log.Printf("milestone rule invalidation subscriber stopped: %v", err)
+	}
+}
+
+func splitEtcdEndpoints(raw string) []string {
+	parts := strings.Split(raw, ",")
+	endpoints := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			endpoints = append(endpoints, p)
+		}
+	}
+	if len(endpoints) == 0 {
+		return []string{"localhost:2379"}
+	}
+	return endpoints
+}

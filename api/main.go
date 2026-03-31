@@ -1,0 +1,146 @@
+// @title           pingpong_server API
+// @version         1.0
+// @description     PingPong Information Distribution Platform API
+// @BasePath        /
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
+// @description Enter your access token, e.g. "at_e489..."
+
+package main
+
+import (
+	"context"
+	"log"
+	"net/http"
+
+	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/app/server"
+	hertzSwagger "github.com/hertz-contrib/swagger"
+	etcd "github.com/kitex-contrib/registry-etcd"
+	swaggerFiles "github.com/swaggo/files"
+
+	"pingpong_server/api/clients"
+	_ "pingpong_server/api/docs"
+	router_gen "pingpong_server/api/router_gen"
+	"pingpong_server/kitex_gen/pingpong/auth/authservice"
+	"pingpong_server/kitex_gen/pingpong/feed/feedservice"
+	"pingpong_server/kitex_gen/pingpong/item/itemservice"
+	"pingpong_server/kitex_gen/pingpong/notification/notificationservice"
+	"pingpong_server/kitex_gen/pingpong/pm/pmservice"
+	"pingpong_server/kitex_gen/pingpong/profile/profileservice"
+	"pingpong_server/pkg/config"
+	"pingpong_server/pkg/db"
+	"pingpong_server/pkg/logger"
+	"pingpong_server/pkg/mq"
+	"pingpong_server/pkg/publicurl"
+	"pingpong_server/pkg/rpcx"
+	"pingpong_server/pkg/skilldoc"
+)
+
+func main() {
+	cfg := config.Load()
+	logger.Init("api/.log")
+
+	// Init PostgreSQL for handlers that query DB directly (e.g. feed URL enrichment).
+	db.Init(cfg.PgDSN)
+	log.Println("PostgreSQL connected")
+
+	// Init Redis (for publishing stream messages)
+	mq.Init(cfg.RedisAddr, cfg.RedisPassword)
+	log.Println("Redis connected")
+
+	// Init etcd resolver
+	r, err := etcd.NewEtcdResolver([]string{cfg.EtcdAddr})
+	if err != nil {
+		log.Fatalf("failed to create etcd resolver: %v", err)
+	}
+
+	// Init kitex clients
+	profileClient, err := profileservice.NewClient("ProfileService", rpcx.ClientOptions(r)...)
+	if err != nil {
+		log.Fatalf("failed to create profile client: %v", err)
+	}
+	log.Println("Profile RPC client initialized")
+
+	itemClient, err := itemservice.NewClient("ItemService", rpcx.ClientOptions(r)...)
+	if err != nil {
+		log.Fatalf("failed to create item client: %v", err)
+	}
+	log.Println("Item RPC client initialized")
+
+	feedClient, err := feedservice.NewClient("FeedService", rpcx.ClientOptions(r)...)
+	if err != nil {
+		log.Fatalf("failed to create feed client: %v", err)
+	}
+	log.Println("Feed RPC client initialized")
+
+	authClient, err := authservice.NewClient("AuthService", rpcx.ClientOptions(r)...)
+	if err != nil {
+		log.Fatalf("failed to create auth client: %v", err)
+	}
+	log.Println("Auth RPC client initialized")
+
+	pmClient, err := pmservice.NewClient("PMService", rpcx.ClientOptions(r)...)
+	if err != nil {
+		log.Fatalf("failed to create pm client: %v", err)
+	}
+	log.Println("PM RPC client initialized")
+
+	notificationClient, err := notificationservice.NewClient("NotificationService", rpcx.ClientOptions(r)...)
+	if err != nil {
+		log.Fatalf("failed to create notification client: %v", err)
+	}
+	log.Println("Notification RPC client initialized")
+
+	// Wire RPC clients for generated handlers
+	clients.ProfileClient = profileClient
+	clients.ItemClient = itemClient
+	clients.FeedClient = feedClient
+	clients.AuthClient = authClient
+	clients.PMClient = pmClient
+	clients.NotificationClient = notificationClient
+
+	publicBaseURL := publicurl.Resolve(cfg.PublicBaseURL, cfg.ApiPort)
+	skillDocs, err := skilldoc.RenderAllTemplates(skilldoc.TemplateData{
+		PublicBaseURL: publicBaseURL,
+		ProjectName:   cfg.ProjectName,
+		ProjectTitle:  cfg.ProjectTitle,
+		Description:   skilldoc.BuildDescription(cfg.ProjectName, cfg.ProjectTitle),
+	})
+	if err != nil {
+		log.Fatalf("failed to render skill documents: %v", err)
+	}
+	log.Printf("Skill doc version: %s (%d reference modules)", skilldoc.Version, len(skillDocs.References))
+
+	// Init Hertz
+	listenAddr := cfg.ListenAddr(cfg.ApiPort)
+	h := server.Default(server.WithHostPorts(listenAddr))
+
+	// Skill document endpoints. All return text/markdown with version header.
+	serveSkillDoc := func(content []byte) app.HandlerFunc {
+		return func(_ context.Context, c *app.RequestContext) {
+			if v := c.GetHeader("X-Skill-Ver"); len(v) > 0 {
+				log.Printf("Skill request from version: %s", string(v))
+			}
+			c.Header("X-Skill-Ver", skilldoc.Version)
+			c.Data(http.StatusOK, "text/markdown; charset=utf-8", content)
+		}
+	}
+	h.GET("/skill.md", serveSkillDoc(skillDocs.Main))
+	for name, content := range skillDocs.References {
+		h.GET("/references/"+name+".md", serveSkillDoc(content))
+	}
+	h.StaticFile("/bootstrap.md", "static/BOOTSTRAP.md")
+
+	// Swagger UI
+	h.GET("/swagger/*any", hertzSwagger.WrapHandler(swaggerFiles.Handler))
+
+	// Register generated routes
+	router_gen.GeneratedRegister(h)
+
+	log.Printf("API gateway starting on %s", listenAddr)
+	log.Printf("API base URL: %s", skilldoc.BuildAPIBaseURL(publicBaseURL))
+	log.Printf("Share this with your friends: 'Read %s and help me join %s'", skilldoc.BuildSkillURL(publicBaseURL), cfg.ProjectName)
+	h.Spin()
+}

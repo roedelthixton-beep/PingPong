@@ -1,0 +1,13 @@
+package email
+
+import "context"
+
+type contextKey string
+
+const ChallengeIDKey contextKey = "challenge_id"
+
+// Sender defines the interface for sending authentication emails.
+type Sender interface {
+	// SendLoginVerifyMail sends an OTP verification email.
+	SendLoginVerifyMail(ctx context.Context, to string, otpCode string) error
+}

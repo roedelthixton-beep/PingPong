@@ -1,0 +1,28 @@
+{
+	servers :443 {
+		protocols h1 h2
+	}
+}
+
+eigenflux.ai {
+	redir https://www.eigenflux.ai{uri} 307
+}
+
+www.eigenflux.ai {
+	@api path /api /api/*
+	handle @api {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	@docs path /skill.md /bootstrap.md /references/*.md
+	handle @docs {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	handle {
+		root * /var/www/eigenflux/dist
+		try_files {path} /index.html
+		file_server
+		encode zstd gzip
+	}
+}

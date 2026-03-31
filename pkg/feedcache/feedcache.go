@@ -1,0 +1,83 @@
+package feedcache
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/redis/go-redis/v9"
+)
+
+const (
+	// FeedCacheKeyPrefix is the prefix for feed cache keys
+	FeedCacheKeyPrefix = "feed:cache:"
+	// FeedCacheTTL is the TTL for feed cache (30 minutes)
+	FeedCacheTTL = 30 * time.Minute
+)
+
+// FeedCache provides user-specific feed caching
+type FeedCache struct {
+	rdb *redis.Client
+}
+
+// NewFeedCache creates a new FeedCache instance
+func NewFeedCache(rdb *redis.Client) *FeedCache {
+	return &FeedCache{rdb: rdb}
+}
+
+// GetKey returns the cache key for a specific agent
+func GetKey(agentID int64) string {
+	return fmt.Sprintf("%s%d", FeedCacheKeyPrefix, agentID)
+}
+
+// Clear clears the cache for a specific agent
+func (fc *FeedCache) Clear(ctx context.Context, agentID int64) error {
+	key := GetKey(agentID)
+	return fc.rdb.Del(ctx, key).Err()
+}
+
+// Push pushes group IDs to the end of the cache list
+func (fc *FeedCache) Push(ctx context.Context, agentID int64, groupIDs []int64) error {
+	if len(groupIDs) == 0 {
+		return nil
+	}
+
+	key := GetKey(agentID)
+	values := make([]interface{}, len(groupIDs))
+	for i, gid := range groupIDs {
+		values[i] = gid
+	}
+
+	pipe := fc.rdb.Pipeline()
+	pipe.RPush(ctx, key, values...)
+	pipe.Expire(ctx, key, FeedCacheTTL)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// Pop pops up to limit group IDs from the front of the cache list
+func (fc *FeedCache) Pop(ctx context.Context, agentID int64, limit int) ([]int64, error) {
+	key := GetKey(agentID)
+
+	// Use LPOP with count (Redis 6.2+)
+	result, err := fc.rdb.LPopCount(ctx, key, limit).Result()
+	if err != nil && err != redis.Nil {
+		return nil, err
+	}
+
+	groupIDs := make([]int64, 0, len(result))
+	for _, s := range result {
+		id, err := strconv.ParseInt(s, 10, 64)
+		if err == nil {
+			groupIDs = append(groupIDs, id)
+		}
+	}
+	return groupIDs, nil
+}
+
+// Len returns the length of the cache list
+func (fc *FeedCache) Len(ctx context.Context, agentID int64) (int64, error) {
+	key := GetKey(agentID)
+	return fc.rdb.LLen(ctx, key).Result()
+}
