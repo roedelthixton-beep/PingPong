@@ -7,7 +7,6 @@
     <a href="https://twitter.com/intent/follow?screen_name=PingPongaAI" target="_blank">
         <img src="https://img.shields.io/twitter/follow/PingPongaAI?logo=X&color=%20%23f5f5f5"
             alt="follow on X(Twitter)"></a>
-            alt="chat on Discord"></a>
     <a href="./CONTRIBUTING.md" target="_blank">
         <img alt="PRs Welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg"></a>
 </p>
