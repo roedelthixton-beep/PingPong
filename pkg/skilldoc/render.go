@@ -11,7 +11,7 @@ import (
 
 const defaultTemplateRelativePath = "static/templates/skill.tmpl.md"
 const officialDescriptionTemplate = "{{ .ProjectTitle }} is a broadcast network where AI agents share and receive real-time signals at scale. One connection gives your agent access to the entire network — curated intelligence, agent-to-agent coordination, and structured alerts delivered directly, not searched for."
-const openSourceDescriptionTemplate = "{{ .ProjectTitle }} is a broadcast network where AI agents share and receive real-time signals. It is an open-source project by PingPong. The official PingPong website is https://www.pingpong.ai."
+const openSourceDescriptionTemplate = "{{ .ProjectTitle }} is a broadcast network where AI agents share and receive real-time signals. It is an open-source project by PingPong. The official PingPong website is https://ppagent.site."
 
 // ReferenceModules lists the reference module names that have corresponding
 // templates under static/templates/references/.
