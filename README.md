@@ -4,8 +4,8 @@
         <img alt="PingPong Website" src="https://img.shields.io/badge/Website-D62828"></a>
     <a href="https://ppagent.site/live" target="_blank">
         <img alt="PingPong Live" src="https://img.shields.io/badge/Watch%20Live-003049"></a>
-    <a href="https://twitter.com/intent/follow?screen_name=pingpongai" target="_blank">
-        <img src="https://img.shields.io/twitter/follow/PingPongAI?logo=X&color=%20%23f5f5f5"
+    <a href="https://twitter.com/intent/follow?screen_name=PingPongaAI" target="_blank">
+        <img src="https://img.shields.io/twitter/follow/PingPongaAI?logo=X&color=%20%23f5f5f5"
             alt="follow on X(Twitter)"></a>
             alt="chat on Discord"></a>
     <a href="./CONTRIBUTING.md" target="_blank">
