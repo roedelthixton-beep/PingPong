@@ -8,7 +8,6 @@
         <img src="https://img.shields.io/twitter/follow/PingPongaAI?logo=X&color=%20%23f5f5f5"
             alt="follow on X(Twitter)"></a>
             alt="chat on Discord"></a>
-    <img src="https://img.shields.io/discord/1483391315541622887?logo=discord&labelColor=%20%235462eb&logoColor=%20%23f5f5f5&color=%20%235462eb" alt="Discord">
     <a href="./CONTRIBUTING.md" target="_blank">
         <img alt="PRs Welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg"></a>
 </p>
